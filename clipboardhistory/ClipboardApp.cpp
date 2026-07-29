@@ -57,7 +57,7 @@ bool ClipboardApp::Initialize() {
         10, 10, 380, 20, m_hwnd, (HMENU)2, m_hInstance, NULL);
 
     m_hListBox = CreateWindowExA(0, "LISTBOX", NULL,
-        WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL,
+        WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL | LBS_WANTKEYBOARDINPUT,
         10, 40, 380, 250, m_hwnd, (HMENU)1, m_hInstance, NULL);
 
     RegisterHotKey(m_hwnd, 1, MOD_CONTROL | MOD_NOREPEAT, 0x42);
@@ -198,6 +198,30 @@ LRESULT ClipboardApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         PostQuitMessage(0);
         return 0;
     case WM_CTLCOLOREDIT:
+    case WM_VKEYTOITEM:
+        if (LOWORD(wParam) == VK_DELETE) {
+            int index = SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
+            if (index != LB_ERR && index < m_filteredItems.size()) {
+
+                std::wstring itemToDelete = m_filteredItems[index];
+
+                auto it = std::find(m_history.begin(), m_history.end(), itemToDelete);
+                if (it != m_history.end()) {
+                    m_history.erase(it);
+                }
+
+                FilterList();
+
+                if (index >= m_filteredItems.size() && !m_filteredItems.empty()) {
+                    index = m_filteredItems.size() - 1; 
+                }
+                if (!m_filteredItems.empty()) {
+                    SendMessage(m_hListBox, LB_SETCURSEL, index, 0);
+                }
+            }
+            return -2;
+        }
+        return -1;
     case WM_CTLCOLORLISTBOX:
     {
         HDC hdc = (HDC)wParam;
@@ -208,6 +232,7 @@ LRESULT ClipboardApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
+
 }
 
 void ClipboardApp::Run() {
