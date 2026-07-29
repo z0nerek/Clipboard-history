@@ -1,4 +1,5 @@
 #pragma once
+
 #include <windows.h>
 #include <string>
 #include <deque>
@@ -7,15 +8,18 @@
 #include <shellapi.h>
 #include <fstream>
 #include <ShlObj.h>
-#include <dwmapi.h> // Dodane: API zarządzania wyglądem okien
+#include <dwmapi.h>
 
-#pragma comment(lib, "dwmapi.lib") // Automatyczne linkowanie biblioteki DWM
-
-#define WM_TRAYICON (WM_USER + 1)
-#define ID_TRAY_EXIT 1001
+#pragma comment(lib, "dwmapi.lib")
 
 #define WM_TRAYICON (WM_USER + 1)
-#define ID_TRAY_EXIT 1001
+#define ID_TRAY_CLEAR 1001
+#define ID_TRAY_EXIT 1002
+
+struct ClipboardItem {
+    std::wstring text;
+    bool isPinned = false;
+};
 
 class ClipboardApp {
 public:
@@ -48,11 +52,10 @@ private:
     HINSTANCE m_hInstance;
     HWND m_hwnd;
     HWND m_hListBox;
-    HWND m_hSearchBox; 
-
+    HWND m_hSearchBox;
     HBRUSH m_hDarkBrush;
 
-    std::deque<std::wstring> m_history;
-    std::vector<std::wstring> m_filteredItems; 
+    std::deque<ClipboardItem> m_history;
+    std::vector<size_t> m_filteredIndices;
     const size_t MAX_HISTORY = 20;
 };

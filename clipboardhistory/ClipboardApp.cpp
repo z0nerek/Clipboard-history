@@ -2,14 +2,33 @@
 #include <vector>
 #include "resource.h"
 
-ClipboardApp::ClipboardApp(HINSTANCE hInstance) : m_hInstance(hInstance), m_hwnd(NULL), m_hListBox(NULL) {}
+// Zmienna i procedura do obsługi Ctrl + A w polu tekstowym (Edit)
+static WNDPROC g_OriginalEditWndProc = nullptr;
+
+static LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_KEYDOWN) {
+        if ((wParam == 'A' || wParam == 'a') && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            SendMessage(hwnd, EM_SETSEL, 0, -1); // Zaznacz cały tekst
+            return 0;
+        }
+    }
+    // Wyciszenie systemowego dźwięku błędu przy Ctrl+A
+    if (msg == WM_CHAR) {
+        if (wParam == 1) {
+            return 0;
+        }
+    }
+    return CallWindowProc(g_OriginalEditWndProc, hwnd, msg, wParam, lParam);
+}
+
+ClipboardApp::ClipboardApp(HINSTANCE hInstance) : m_hInstance(hInstance), m_hwnd(NULL), m_hListBox(NULL), m_hSearchBox(NULL), m_hDarkBrush(NULL) {}
 
 ClipboardApp::~ClipboardApp() {
-    SaveHistory(); 
+    SaveHistory();
     RemoveTrayIcon();
     RemoveClipboardFormatListener(m_hwnd);
     UnregisterHotKey(m_hwnd, 1);
-    DeleteObject(m_hDarkBrush); 
+    if (m_hDarkBrush) DeleteObject(m_hDarkBrush);
 }
 
 void ClipboardApp::RegisterStartup() {
@@ -18,7 +37,7 @@ void ClipboardApp::RegisterStartup() {
     if (RegCreateKeyExA(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         char exePath[MAX_PATH];
         GetModuleFileNameA(NULL, exePath, MAX_PATH);
-        RegSetValueExA(hKey, "LightClipboardHistory", 0, REG_SZ, (BYTE*)exePath, strlen(exePath) + 1);
+        RegSetValueExA(hKey, "LightClipboardHistory", 0, REG_SZ, (BYTE*)exePath, (DWORD)(strlen(exePath) + 1));
         RegCloseKey(hKey);
     }
 }
@@ -34,27 +53,26 @@ bool ClipboardApp::Initialize() {
 
     RegisterClassA(&wc);
 
-
     m_hwnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, "Clipboard",
         WS_POPUP, 0, 0, 400, 300, NULL, NULL, m_hInstance, this);
     if (!m_hwnd) return false;
 
-
     int darkMode = 1;
-    DwmSetWindowAttribute(m_hwnd, 20 , &darkMode, sizeof(darkMode));
+    DwmSetWindowAttribute(m_hwnd, 20, &darkMode, sizeof(darkMode));
 
-    
-    int cornerPreference = 2; 
-    DwmSetWindowAttribute(m_hwnd, 33 , &cornerPreference, sizeof(cornerPreference));
-
+    int cornerPreference = 2;
+    DwmSetWindowAttribute(m_hwnd, 33, &cornerPreference, sizeof(cornerPreference));
 
     int backdropType = 3;
     DwmSetWindowAttribute(m_hwnd, 38, &backdropType, sizeof(backdropType));
 
-
+    // Tworzenie pola wyszukiwarki
     m_hSearchBox = CreateWindowExA(0, "EDIT", "",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         10, 10, 380, 20, m_hwnd, (HMENU)2, m_hInstance, NULL);
+
+    // Podpięcie procedury obsługującej Ctrl + A do pola edycji
+    g_OriginalEditWndProc = (WNDPROC)SetWindowLongPtr(m_hSearchBox, GWLP_WNDPROC, (LONG_PTR)EditSubclassProc);
 
     m_hListBox = CreateWindowExA(0, "LISTBOX", NULL,
         WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL | LBS_WANTKEYBOARDINPUT,
@@ -81,18 +99,37 @@ void ClipboardApp::OnClipboardUpdate() {
         if (text) {
             std::wstring newText(text);
 
-            auto it = std::find(m_history.begin(), m_history.end(), newText);
+            auto it = std::find_if(m_history.begin(), m_history.end(), [&newText](const ClipboardItem& item) {
+                return item.text == newText;
+                });
 
-            if (m_history.empty() || m_history.front() != newText) {
-
+            if (m_history.empty() || m_history.front().text != newText) {
                 if (it != m_history.end()) {
+                    bool wasPinned = it->isPinned;
                     m_history.erase(it);
+                    m_history.push_front({ newText, wasPinned });
+                }
+                else {
+                    m_history.push_front({ newText, false });
+                    if (m_history.size() > MAX_HISTORY) {
+                        auto lastUnpinned = std::find_if(m_history.rbegin(), m_history.rend(), [](const ClipboardItem& item) {
+                            return !item.isPinned;
+                            });
+                        if (lastUnpinned != m_history.rend()) {
+                            m_history.erase(std::next(lastUnpinned).base());
+                        }
+                        else {
+                            m_history.pop_back();
+                        }
+                    }
                 }
 
-                m_history.push_front(newText);
-                if (m_history.size() > MAX_HISTORY) m_history.pop_back();
+                std::stable_sort(m_history.begin(), m_history.end(), [](const ClipboardItem& a, const ClipboardItem& b) {
+                    return a.isPinned > b.isPinned;
+                    });
 
                 FilterList();
+                SaveHistory();
             }
             GlobalUnlock(hData);
         }
@@ -165,15 +202,25 @@ LRESULT ClipboardApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
 
+        if (LOWORD(wParam) == ID_TRAY_CLEAR) {
+            m_history.erase(std::remove_if(m_history.begin(), m_history.end(), [](const ClipboardItem& item) {
+                return !item.isPinned;
+                }), m_history.end());
+            SaveHistory();
+            FilterList();
+            return 0;
+        }
+
         if (LOWORD(wParam) == 2 && HIWORD(wParam) == EN_CHANGE) {
             FilterList();
             return 0;
         }
 
         if (LOWORD(wParam) == 1 && HIWORD(wParam) == LBN_DBLCLK) {
-            int index = SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
-            if (index != LB_ERR && index < m_filteredItems.size()) {
-                std::wstring selectedText = m_filteredItems[index];
+            int index = (int)SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
+            if (index != LB_ERR && index < (int)m_filteredIndices.size()) {
+                size_t histIndex = m_filteredIndices[index];
+                std::wstring selectedText = m_history[histIndex].text;
 
                 if (OpenClipboard(hwnd)) {
                     EmptyClipboard();
@@ -193,46 +240,76 @@ LRESULT ClipboardApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
         }
         return 0;
-        return 0;
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
-    case WM_CTLCOLOREDIT:
+
     case WM_VKEYTOITEM:
-        if (LOWORD(wParam) == VK_DELETE) {
-            int index = SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
-            if (index != LB_ERR && index < m_filteredItems.size()) {
+    {
+        int vk = LOWORD(wParam);
+        int index = (int)SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
 
-                std::wstring itemToDelete = m_filteredItems[index];
+        if (vk == VK_INSERT) {
+            if (index != LB_ERR && index < (int)m_filteredIndices.size()) {
+                size_t histIndex = m_filteredIndices[index];
+                std::wstring selectedText = m_history[histIndex].text;
 
-                auto it = std::find(m_history.begin(), m_history.end(), itemToDelete);
+                auto it = std::find_if(m_history.begin(), m_history.end(), [&selectedText](const ClipboardItem& item) {
+                    return item.text == selectedText;
+                    });
+
                 if (it != m_history.end()) {
-                    m_history.erase(it);
+                    it->isPinned = !it->isPinned;
                 }
+
+                std::stable_sort(m_history.begin(), m_history.end(), [](const ClipboardItem& a, const ClipboardItem& b) {
+                    return a.isPinned > b.isPinned;
+                    });
 
                 FilterList();
+                SaveHistory();
 
-                if (index >= m_filteredItems.size() && !m_filteredItems.empty()) {
-                    index = m_filteredItems.size() - 1; 
-                }
-                if (!m_filteredItems.empty()) {
-                    SendMessage(m_hListBox, LB_SETCURSEL, index, 0);
+                for (size_t i = 0; i < m_filteredIndices.size(); ++i) {
+                    if (m_history[m_filteredIndices[i]].text == selectedText) {
+                        SendMessage(m_hListBox, LB_SETCURSEL, (WPARAM)i, 0);
+                        break;
+                    }
                 }
             }
             return -2;
         }
+
+        if (vk == VK_DELETE) {
+            if (index != LB_ERR && index < (int)m_filteredIndices.size()) {
+                size_t histIndex = m_filteredIndices[index];
+                m_history.erase(m_history.begin() + histIndex);
+
+                FilterList();
+
+                if (index >= (int)m_filteredIndices.size() && !m_filteredIndices.empty()) {
+                    index = (int)m_filteredIndices.size() - 1;
+                }
+                if (!m_filteredIndices.empty()) {
+                    SendMessage(m_hListBox, LB_SETCURSEL, index, 0);
+                }
+                SaveHistory();
+            }
+            return -2;
+        }
         return -1;
+    }
+
+    case WM_CTLCOLOREDIT:
     case WM_CTLCOLORLISTBOX:
     {
         HDC hdc = (HDC)wParam;
         SetTextColor(hdc, RGB(230, 230, 230));
         SetBkColor(hdc, RGB(32, 32, 32));
-
         return (LRESULT)m_hDarkBrush;
     }
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
-
 }
 
 void ClipboardApp::Run() {
@@ -269,7 +346,9 @@ void ClipboardApp::ShowTrayMenu() {
     POINT pt;
     GetCursorPos(&pt);
     HMENU hMenu = CreatePopupMenu();
-    AppendMenuA(hMenu, MF_STRING, ID_TRAY_EXIT, "Zakoncz program");
+    AppendMenuA(hMenu, MF_STRING, ID_TRAY_CLEAR, "Clear History (Keep Pins)");
+    AppendMenuA(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hMenu, MF_STRING, ID_TRAY_EXIT, "Exit");
 
     SetForegroundWindow(m_hwnd);
     TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, m_hwnd, NULL);
@@ -280,23 +359,23 @@ void ClipboardApp::FilterList() {
     wchar_t query[256];
     GetWindowTextW(m_hSearchBox, query, 256);
     std::wstring q(query);
-
     std::transform(q.begin(), q.end(), q.begin(), ::towlower);
 
     SendMessage(m_hListBox, LB_RESETCONTENT, 0, 0);
-    m_filteredItems.clear();
+    m_filteredIndices.clear();
 
-    for (const auto& item : m_history) {
-        std::wstring lowerItem = item;
+    for (size_t i = 0; i < m_history.size(); ++i) {
+        const auto& item = m_history[i];
+        std::wstring lowerItem = item.text;
         std::transform(lowerItem.begin(), lowerItem.end(), lowerItem.begin(), ::towlower);
 
         if (q.empty() || lowerItem.find(q) != std::wstring::npos) {
-            m_filteredItems.push_back(item);
+            m_filteredIndices.push_back(i);
 
-            std::wstring preview = item;
+            std::wstring preview = (item.isPinned ? L"[PIN] " : L"   ") + item.text;
             std::replace(preview.begin(), preview.end(), L'\n', L' ');
             std::replace(preview.begin(), preview.end(), L'\r', L' ');
-            if (preview.length() > 55) preview = preview.substr(0, 52) + L"...";
+            if (preview.length() > 52) preview = preview.substr(0, 49) + L"...";
 
             SendMessageW(m_hListBox, LB_ADDSTRING, 0, (LPARAM)preview.c_str());
         }
@@ -308,7 +387,7 @@ std::wstring ClipboardApp::GetHistoryFilePath() {
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, path))) {
         return std::wstring(path) + L"\\ClipboardHistory.dat";
     }
-    return L"ClipboardHistory.dat"; 
+    return L"ClipboardHistory.dat";
 }
 
 void ClipboardApp::SaveHistory() {
@@ -319,9 +398,10 @@ void ClipboardApp::SaveHistory() {
     file.write(reinterpret_cast<const char*>(&count), sizeof(count));
 
     for (const auto& item : m_history) {
-        size_t len = item.length();
+        file.write(reinterpret_cast<const char*>(&item.isPinned), sizeof(item.isPinned));
+        size_t len = item.text.length();
         file.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        file.write(reinterpret_cast<const char*>(item.data()), len * sizeof(wchar_t));
+        file.write(reinterpret_cast<const char*>(item.text.data()), len * sizeof(wchar_t));
     }
 }
 
@@ -330,16 +410,27 @@ void ClipboardApp::LoadHistory() {
     if (!file) return;
 
     size_t count = 0;
-    if (file.read(reinterpret_cast<char*>(&count), sizeof(count))) {
-        for (size_t i = 0; i < count && i < MAX_HISTORY; ++i) {
-            size_t len = 0;
-            if (file.read(reinterpret_cast<char*>(&len), sizeof(len))) {
-                std::wstring item(len, L'\0');
-                file.read(reinterpret_cast<char*>(&item[0]), len * sizeof(wchar_t));
-                m_history.push_back(item);
-            }
-        }
+    if (!file.read(reinterpret_cast<char*>(&count), sizeof(count))) return;
+    if (count > MAX_HISTORY) return;
+
+    m_history.clear();
+    for (size_t i = 0; i < count; ++i) {
+        bool isPinned = false;
+        if (!file.read(reinterpret_cast<char*>(&isPinned), sizeof(isPinned))) break;
+
+        size_t len = 0;
+        if (!file.read(reinterpret_cast<char*>(&len), sizeof(len))) break;
+        if (len > 50000) break;
+
+        std::wstring text(len, L'\0');
+        if (!file.read(reinterpret_cast<char*>(&text[0]), len * sizeof(wchar_t))) break;
+
+        m_history.push_back({ text, isPinned });
     }
+
+    std::stable_sort(m_history.begin(), m_history.end(), [](const ClipboardItem& a, const ClipboardItem& b) {
+        return a.isPinned > b.isPinned;
+        });
 }
 
 void ClipboardApp::CheckFirstRunAndAutostart() {
@@ -347,9 +438,7 @@ void ClipboardApp::CheckFirstRunAndAutostart() {
     DWORD disposition;
 
     if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\LightClipboardHistory", 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hKey, &disposition) == ERROR_SUCCESS) {
-
         if (disposition == REG_CREATED_NEW_KEY) {
-
             int result = MessageBoxA(NULL,
                 "Would you like the clipboard history to automatically start in the background every time Windows boots?",
                 "First Run Setup",
