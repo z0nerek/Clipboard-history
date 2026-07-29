@@ -27,3 +27,13 @@ The primary goal of this project is to provide a fast, reliable clipboard histor
 2. Copy text as usual (`Ctrl + C`).
 3. Press `Ctrl + B` to open the history menu.
 4. Type to filter, use arrow keys or mouse to select, and press `Enter` or double-click to copy an item back to your clipboard.
+
+## 📁 Data Storage
+
+To ensure your clipboard history persists across system reboots, the application saves your copied items locally. The data is stored in a secure, binary format at the following location:
+
+`%LOCALAPPDATA%\ClipboardHistory.dat`
+
+*(Typically resolves to `C:\Users\<YourUsername>\AppData\Local\ClipboardHistory.dat`)*
+
+If you ever want to completely wipe your saved history, you can safely delete this file while the application is closed.
