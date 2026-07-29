@@ -1,4 +1,4 @@
-# Pliki tymczasowe Visual Studio
+# Pliki tymczasowe Visual Studio i binarne
 .vs/
 Debug/
 Release/
@@ -7,18 +7,14 @@ x86/
 bld/
 [Bb]in/
 [Oo]bj/
-
-# Pliki użytkownika
 *.user
 *.suo
 *.dbmdl
-
-# Pliki binarne kompilacji
 *.exe
 *.dll
 *.pdb
 *.ilk
 *.cache
 
-# Ewentualny lokalny plik z Twoją prywatną historią, żeby go nie wysłać przypadkiem
+# Prywatna historia schowka (żeby nie wysłać swoich haseł!)
 ClipboardHistory.dat
