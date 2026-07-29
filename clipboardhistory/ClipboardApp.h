@@ -68,6 +68,7 @@ private:
 
     DWORD m_lastClipboardSequence = 0;
     bool m_ignoreNextClipboardUpdate = false;
+    ULONGLONG m_lastImageAddTime = 0; 
 
     std::deque<ClipboardItem> m_history;
     std::vector<size_t> m_filteredIndices;

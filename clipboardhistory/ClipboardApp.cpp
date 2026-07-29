@@ -126,7 +126,6 @@ bool ClipboardApp::Initialize() {
     int backdropType = 3;
     DwmSetWindowAttribute(m_hwnd, 38, &backdropType, sizeof(backdropType));
 
-    // Kontrolki startują w trybie tekstowym (po lewej stronie okna o szerokości 400)
     m_hSearchBox = CreateWindowExA(0, "EDIT", "",
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         10, 10, 380, 20, m_hwnd, (HMENU)2, m_hInstance, NULL);
@@ -137,7 +136,6 @@ bool ClipboardApp::Initialize() {
         WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL | LBS_WANTKEYBOARDINPUT,
         10, 40, 380, 250, m_hwnd, (HMENU)1, m_hInstance, NULL);
 
-    // Podgląd obrazu po LEWEJ stronie okna (gdy okno rozszerzy się do 680)
     m_hImagePreviewBox = CreateWindowExA(0, "STATIC", "",
         WS_CHILD | SS_BITMAP | SS_CENTERIMAGE | WS_BORDER,
         10, 10, 270, 280, m_hwnd, (HMENU)3, m_hInstance, NULL);
@@ -179,6 +177,14 @@ void ClipboardApp::OnClipboardUpdate() {
     if (!OpenClipboard(m_hwnd)) return;
 
     if (IsClipboardFormatAvailable(CF_BITMAP)) {
+        // Blokada czasowa (debounce): ignorujemy kolejne zdarzenia obrazu w ciągu 1 sekundy od poprzedniego
+        ULONGLONG currentTime = GetTickCount64();
+        if (currentTime - m_lastImageAddTime < 1000) {
+            CloseClipboard();
+            return;
+        }
+        m_lastImageAddTime = currentTime;
+
         HBITMAP hBmp = (HBITMAP)GetClipboardData(CF_BITMAP);
         if (hBmp) {
             BITMAP bmpInfo;
@@ -315,11 +321,10 @@ void ClipboardApp::UpdateImagePreview() {
     if (showImage) {
         ::ShowWindow(m_hImagePreviewBox, SW_SHOW);
         int newWidth = 680;
-        int newX = workArea.right - newWidth - margin; // Okno rośnie w lewo, prawa strona sztywno przykuta do krawędzi ekranu
+        int newX = workArea.right - newWidth - margin;
 
         SetWindowPos(m_hwnd, HWND_TOPMOST, newX, workArea.bottom - windowH - margin, newWidth, windowH, SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // Wyszukiwarka i lista przesuwają się na prawą stronę okna (X = 290)
         SetWindowPos(m_hSearchBox, NULL, 290, 10, 380, 20, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(m_hListBox, NULL, 290, 40, 380, 250, SWP_NOZORDER | SWP_NOACTIVATE);
     }
@@ -327,11 +332,10 @@ void ClipboardApp::UpdateImagePreview() {
         SendMessage(m_hImagePreviewBox, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)NULL);
         ::ShowWindow(m_hImagePreviewBox, SW_HIDE);
         int newWidth = 400;
-        int newX = workArea.right - newWidth - margin; // Okno kurczy się do prawej krawędzi
+        int newX = workArea.right - newWidth - margin;
 
         SetWindowPos(m_hwnd, HWND_TOPMOST, newX, workArea.bottom - windowH - margin, newWidth, windowH, SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // Wyszukiwarka i lista wracają na lewą stronę kompaktowego okna (X = 10)
         SetWindowPos(m_hSearchBox, NULL, 10, 10, 380, 20, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(m_hListBox, NULL, 10, 40, 380, 250, SWP_NOZORDER | SWP_NOACTIVATE);
     }
