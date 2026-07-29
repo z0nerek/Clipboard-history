@@ -1,0 +1,334 @@
+#include "ClipboardApp.h"
+#include <vector>
+#include "resource.h"
+
+ClipboardApp::ClipboardApp(HINSTANCE hInstance) : m_hInstance(hInstance), m_hwnd(NULL), m_hListBox(NULL) {}
+
+ClipboardApp::~ClipboardApp() {
+    SaveHistory(); 
+    RemoveTrayIcon();
+    RemoveClipboardFormatListener(m_hwnd);
+    UnregisterHotKey(m_hwnd, 1);
+    DeleteObject(m_hDarkBrush); 
+}
+
+void ClipboardApp::RegisterStartup() {
+    HKEY hKey;
+    const char* path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, path, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        RegSetValueExA(hKey, "LightClipboardHistory", 0, REG_SZ, (BYTE*)exePath, strlen(exePath) + 1);
+        RegCloseKey(hKey);
+    }
+}
+
+bool ClipboardApp::Initialize() {
+    m_hDarkBrush = CreateSolidBrush(RGB(32, 32, 32));
+
+    WNDCLASSA wc = { 0 };
+    wc.lpfnWndProc = ClipboardApp::WndProc;
+    wc.hInstance = m_hInstance;
+    wc.lpszClassName = "ClipboardHistoryClass";
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+
+    RegisterClassA(&wc);
+
+
+    m_hwnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, wc.lpszClassName, "Clipboard",
+        WS_POPUP, 0, 0, 400, 300, NULL, NULL, m_hInstance, this);
+    if (!m_hwnd) return false;
+
+
+    int darkMode = 1;
+    DwmSetWindowAttribute(m_hwnd, 20 , &darkMode, sizeof(darkMode));
+
+    
+    int cornerPreference = 2; 
+    DwmSetWindowAttribute(m_hwnd, 33 , &cornerPreference, sizeof(cornerPreference));
+
+
+    int backdropType = 3;
+    DwmSetWindowAttribute(m_hwnd, 38, &backdropType, sizeof(backdropType));
+
+
+    m_hSearchBox = CreateWindowExA(0, "EDIT", "",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        10, 10, 380, 20, m_hwnd, (HMENU)2, m_hInstance, NULL);
+
+    m_hListBox = CreateWindowExA(0, "LISTBOX", NULL,
+        WS_CHILD | WS_VISIBLE | LBS_NOTIFY | WS_VSCROLL,
+        10, 40, 380, 250, m_hwnd, (HMENU)1, m_hInstance, NULL);
+
+    RegisterHotKey(m_hwnd, 1, MOD_CONTROL | MOD_NOREPEAT, 0x42);
+    AddClipboardFormatListener(m_hwnd);
+
+    AddTrayIcon();
+    LoadHistory();
+    FilterList();
+
+    CheckFirstRunAndAutostart();
+
+    return true;
+}
+
+void ClipboardApp::OnClipboardUpdate() {
+    if (!OpenClipboard(m_hwnd)) return;
+
+    HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+    if (hData) {
+        wchar_t* text = static_cast<wchar_t*>(GlobalLock(hData));
+        if (text) {
+            std::wstring newText(text);
+
+            auto it = std::find(m_history.begin(), m_history.end(), newText);
+
+            if (m_history.empty() || m_history.front() != newText) {
+
+                if (it != m_history.end()) {
+                    m_history.erase(it);
+                }
+
+                m_history.push_front(newText);
+                if (m_history.size() > MAX_HISTORY) m_history.pop_back();
+
+                FilterList();
+            }
+            GlobalUnlock(hData);
+        }
+    }
+    CloseClipboard();
+}
+
+void ClipboardApp::ShowWindow() {
+    ::ShowWindow(m_hwnd, SW_RESTORE);
+    ::ShowWindow(m_hwnd, SW_SHOW);
+
+    RECT workArea;
+    SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0);
+
+    int windowW = 400;
+    int windowH = 300;
+    int margin = 10;
+
+    int x = workArea.right - windowW - margin;
+    int y = workArea.bottom - windowH - margin;
+
+    SetWindowPos(m_hwnd, HWND_TOPMOST, x, y, windowW, windowH, SWP_SHOWWINDOW);
+    SetForegroundWindow(m_hwnd);
+
+    SetWindowTextA(m_hSearchBox, "");
+    SetFocus(m_hSearchBox);
+}
+
+void ClipboardApp::HideWindow() {
+    ::ShowWindow(m_hwnd, SW_HIDE);
+}
+
+LRESULT CALLBACK ClipboardApp::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    ClipboardApp* app = nullptr;
+
+    if (msg == WM_NCCREATE) {
+        CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+        app = reinterpret_cast<ClipboardApp*>(pCreate->lpCreateParams);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+    }
+    else {
+        app = reinterpret_cast<ClipboardApp*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+    }
+
+    if (app) return app->HandleMessage(hwnd, msg, wParam, lParam);
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+LRESULT ClipboardApp::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CLIPBOARDUPDATE:
+        OnClipboardUpdate();
+        return 0;
+    case WM_HOTKEY:
+        if (wParam == 1) ShowWindow();
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            HideWindow();
+        }
+        return 0;
+    case WM_TRAYICON:
+        if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONUP) {
+            ShowTrayMenu();
+        }
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wParam) == ID_TRAY_EXIT) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+
+        if (LOWORD(wParam) == 2 && HIWORD(wParam) == EN_CHANGE) {
+            FilterList();
+            return 0;
+        }
+
+        if (LOWORD(wParam) == 1 && HIWORD(wParam) == LBN_DBLCLK) {
+            int index = SendMessage(m_hListBox, LB_GETCURSEL, 0, 0);
+            if (index != LB_ERR && index < m_filteredItems.size()) {
+                std::wstring selectedText = m_filteredItems[index];
+
+                if (OpenClipboard(hwnd)) {
+                    EmptyClipboard();
+                    size_t memSize = (selectedText.length() + 1) * sizeof(wchar_t);
+                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, memSize);
+                    if (hMem) {
+                        wchar_t* lockedMem = static_cast<wchar_t*>(GlobalLock(hMem));
+                        if (lockedMem) {
+                            memcpy(lockedMem, selectedText.c_str(), memSize);
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_UNICODETEXT, hMem);
+                        }
+                    }
+                    CloseClipboard();
+                }
+                HideWindow();
+            }
+        }
+        return 0;
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, RGB(230, 230, 230));
+        SetBkColor(hdc, RGB(32, 32, 32));
+
+        return (LRESULT)m_hDarkBrush;
+    }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void ClipboardApp::Run() {
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+}
+
+void ClipboardApp::AddTrayIcon() {
+    memset(&m_nid, 0, sizeof(NOTIFYICONDATAA));
+    m_nid.cbSize = sizeof(NOTIFYICONDATAA);
+    m_nid.hWnd = m_hwnd;
+    m_nid.uID = 1;
+    m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    m_nid.uCallbackMessage = WM_TRAYICON;
+    m_nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    strcpy_s(m_nid.szTip, "Schowek (Ctrl+B)");
+
+    Shell_NotifyIconA(NIM_ADD, &m_nid);
+}
+
+void ClipboardApp::RemoveTrayIcon() {
+    Shell_NotifyIconA(NIM_DELETE, &m_nid);
+}
+
+void ClipboardApp::ShowTrayMenu() {
+    POINT pt;
+    GetCursorPos(&pt);
+    HMENU hMenu = CreatePopupMenu();
+    AppendMenuA(hMenu, MF_STRING, ID_TRAY_EXIT, "Zakoncz program");
+
+    SetForegroundWindow(m_hwnd);
+    TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, m_hwnd, NULL);
+    DestroyMenu(hMenu);
+}
+
+void ClipboardApp::FilterList() {
+    wchar_t query[256];
+    GetWindowTextW(m_hSearchBox, query, 256);
+    std::wstring q(query);
+
+    std::transform(q.begin(), q.end(), q.begin(), ::towlower);
+
+    SendMessage(m_hListBox, LB_RESETCONTENT, 0, 0);
+    m_filteredItems.clear();
+
+    for (const auto& item : m_history) {
+        std::wstring lowerItem = item;
+        std::transform(lowerItem.begin(), lowerItem.end(), lowerItem.begin(), ::towlower);
+
+        if (q.empty() || lowerItem.find(q) != std::wstring::npos) {
+            m_filteredItems.push_back(item);
+
+            std::wstring preview = item;
+            std::replace(preview.begin(), preview.end(), L'\n', L' ');
+            std::replace(preview.begin(), preview.end(), L'\r', L' ');
+            if (preview.length() > 55) preview = preview.substr(0, 52) + L"...";
+
+            SendMessageW(m_hListBox, LB_ADDSTRING, 0, (LPARAM)preview.c_str());
+        }
+    }
+}
+
+std::wstring ClipboardApp::GetHistoryFilePath() {
+    wchar_t path[MAX_PATH];
+    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, path))) {
+        return std::wstring(path) + L"\\ClipboardHistory.dat";
+    }
+    return L"ClipboardHistory.dat"; 
+}
+
+void ClipboardApp::SaveHistory() {
+    std::ofstream file(GetHistoryFilePath(), std::ios::binary);
+    if (!file) return;
+
+    size_t count = m_history.size();
+    file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+
+    for (const auto& item : m_history) {
+        size_t len = item.length();
+        file.write(reinterpret_cast<const char*>(&len), sizeof(len));
+        file.write(reinterpret_cast<const char*>(item.data()), len * sizeof(wchar_t));
+    }
+}
+
+void ClipboardApp::LoadHistory() {
+    std::ifstream file(GetHistoryFilePath(), std::ios::binary);
+    if (!file) return;
+
+    size_t count = 0;
+    if (file.read(reinterpret_cast<char*>(&count), sizeof(count))) {
+        for (size_t i = 0; i < count && i < MAX_HISTORY; ++i) {
+            size_t len = 0;
+            if (file.read(reinterpret_cast<char*>(&len), sizeof(len))) {
+                std::wstring item(len, L'\0');
+                file.read(reinterpret_cast<char*>(&item[0]), len * sizeof(wchar_t));
+                m_history.push_back(item);
+            }
+        }
+    }
+}
+
+void ClipboardApp::CheckFirstRunAndAutostart() {
+    HKEY hKey;
+    DWORD disposition;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\LightClipboardHistory", 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hKey, &disposition) == ERROR_SUCCESS) {
+
+        if (disposition == REG_CREATED_NEW_KEY) {
+
+            int result = MessageBoxA(NULL,
+                "Czy chcesz, aby historia schowka uruchamiała się automatycznie ukryta w tle przy każdym starcie systemu?",
+                "Pierwsze uruchomienie",
+                MB_YESNO | MB_ICONQUESTION | MB_TOPMOST);
+
+            if (result == IDYES) {
+                RegisterStartup(); 
+            }
+        }
+        RegCloseKey(hKey);
+    }
+}

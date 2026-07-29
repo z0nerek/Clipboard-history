@@ -1,0 +1,24 @@
+# Pliki tymczasowe Visual Studio
+.vs/
+Debug/
+Release/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+
+# Pliki użytkownika
+*.user
+*.suo
+*.dbmdl
+
+# Pliki binarne kompilacji
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.cache
+
+# Ewentualny lokalny plik z Twoją prywatną historią, żeby go nie wysłać przypadkiem
+ClipboardHistory.dat
