@@ -144,7 +144,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ClipboardApp.h" />
-    <ClInclude Include="resource.h" />
+    <ResourceCompile Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="clipboardhistory.rc" />

@@ -26,13 +26,13 @@
     <ClInclude Include="ClipboardApp.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
-      <Filter>Pliki nagłówkowe</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="clipboardhistory.rc">
       <Filter>Pliki zasobów</Filter>
+    </ResourceCompile>
+    <ResourceCompile Include="resource.h">
+      <Filter>Pliki nagłówkowe</Filter>
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>

@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="clipboardhistory/clipboardhistory.vcxproj" />
+  <Project Path="clipboardhistory/clipboardhistory.vcxproj" Id="9bf9a721-277d-4249-8331-3871b201cdde" />
 </Solution>

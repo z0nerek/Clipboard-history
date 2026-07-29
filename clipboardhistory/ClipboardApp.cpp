@@ -225,8 +225,13 @@ void ClipboardApp::AddTrayIcon() {
     m_nid.uID = 1;
     m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     m_nid.uCallbackMessage = WM_TRAYICON;
-    m_nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
     strcpy_s(m_nid.szTip, "Schowek (Ctrl+B)");
+
+    m_nid.hIcon = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_ICON1));
+
+    if (!m_nid.hIcon) {
+        m_nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    }
 
     Shell_NotifyIconA(NIM_ADD, &m_nid);
 }
@@ -321,12 +326,12 @@ void ClipboardApp::CheckFirstRunAndAutostart() {
         if (disposition == REG_CREATED_NEW_KEY) {
 
             int result = MessageBoxA(NULL,
-                "Czy chcesz, aby historia schowka uruchamiała się automatycznie ukryta w tle przy każdym starcie systemu?",
-                "Pierwsze uruchomienie",
+                "Would you like the clipboard history to automatically start in the background every time Windows boots?",
+                "First Run Setup",
                 MB_YESNO | MB_ICONQUESTION | MB_TOPMOST);
 
             if (result == IDYES) {
-                RegisterStartup(); 
+                RegisterStartup();
             }
         }
         RegCloseKey(hKey);
